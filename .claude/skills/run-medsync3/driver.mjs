@@ -9,6 +9,7 @@
 //   PLAYWRIGHT_NODE_MODULES  global node_modules holding playwright
 //                            (default /opt/node22/lib/node_modules/)
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
 
 const require = createRequire(
@@ -17,8 +18,12 @@ const require = createRequire(
 const { chromium } = require('playwright');
 
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:8501';
-const OUT = process.env.SHOT_DIR || new URL('./screenshots', import.meta.url).pathname;
+const OUT = process.env.SHOT_DIR ||
+  fileURLToPath(new URL('./screenshots', import.meta.url));
 mkdirSync(OUT, { recursive: true });
+
+// 30 days out in ISO YYYY-MM-DD — always safely in the future.
+const syncDate = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
 
 const browser = await chromium.launch({ args: ['--no-sandbox'] });
 const page = await (await browser.newContext()).newPage();
@@ -38,13 +43,9 @@ try {
   await dose.click();
   await dose.fill('2');
 
-  // Streamlit's date_input opens a calendar popup; typing into the field
-  // does not stick. Pick a guaranteed-future date: jump to next month and
-  // click day 15. (Calculate errors out if the sync date isn't in the future.)
-  await page.getByPlaceholder('YYYY/MM/DD').click();
-  await page.getByRole('button', { name: 'Next month.' }).click();
-  // Day numbers render as bare <div>s with no role/label — match exact text.
-  await page.getByText('15', { exact: true }).first().click();
+  // Streamlit renders the date field as a native <input type="date"> (no
+  // aria-label, no placeholder) — target by CSS and fill an ISO date.
+  await page.locator('input[type="date"]').fill(syncDate);
   await page.screenshot({ path: `${OUT}/02_filled.png`, fullPage: true });
 
   await page.getByRole('button', { name: 'Calculate' }).click();

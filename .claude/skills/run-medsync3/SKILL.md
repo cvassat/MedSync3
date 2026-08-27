@@ -27,13 +27,17 @@ driver works by pointing `PLAYWRIGHT_BROWSERS_PATH` at it. **Do not run
 
 ## Setup
 
-Create a venv and install Streamlit:
+Create a venv and install Streamlit. **Pin the version** — the driver's
+selectors depend on Streamlit's DOM, and it has changed between releases
+(1.57 rendered the date field as a text input with a calendar popup;
+1.62 uses a native `<input type="date">`). This skill is verified against
+`1.62.0`:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -q --upgrade pip
-pip install -q streamlit
+pip install -q streamlit==1.62.0
 ```
 
 Only for the login app, also install the Supabase client:
@@ -57,8 +61,8 @@ timeout 40 bash -c 'until curl -sf http://127.0.0.1:8501/_stcore/health >/dev/nu
 ```
 
 Drive it. The driver launches headless Chromium, fills the new-medication
-form, picks a future sync date from the calendar, clicks Calculate, prints
-the resulting plan line, and writes `01_initial.png` / `02_filled.png` /
+form, sets the sync date 30 days out, clicks Calculate, prints the
+resulting plan line, and writes `01_initial.png` / `02_filled.png` /
 `03_result.png`:
 
 ```bash
@@ -66,10 +70,11 @@ cd .claude/skills/run-medsync3
 PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers node driver.mjs
 ```
 
-Expected tail of output:
+Expected tail of output (date and unit count depend on the day you run;
+30 days × 2 = 58–60 units is normal — dose × days-until-sync):
 
 ```
-PLAN_LINES: ["Metformin (new): 40 units needed to sync by 2026-06-15"]
+PLAN_LINES: ["Metformin (new): 58 units needed to sync by <YYYY-MM-DD>"]
 OK: smoke flow passed, screenshots in /home/user/MedSync3/.claude/skills/run-medsync3/screenshots
 ```
 
@@ -143,26 +148,36 @@ when importing a Streamlit script outside the server and can be ignored.
   form is submitted — so increasing it never adds the per-medication input
   rows. The only working flow is the new-medication fields + a sync date.
   Don't waste time trying to drive the existing-meds rows; they never render.
-- **The date field's accessible name is "Select a date.", not "Desired
-  Sync Date".** Match it with `getByPlaceholder('YYYY/MM/DD')`. Typing a
-  value into it does **not** stick — you must open the calendar popup and
-  click a day cell. Day numbers are bare `<div>`s (no role/aria-label), so
-  the driver clicks them by exact text.
+- **The date field is a native `<input type="date">` with no aria-label,
+  no placeholder, and no `name`** — `getByLabel('Desired Sync Date')` will
+  not match it. The driver targets it as `input[type="date"]` and fills an
+  ISO `YYYY-MM-DD` string, which the native control accepts directly (no
+  calendar popup to click through).
 - **Sync date must be in the future** or Calculate shows an error and
-  returns no plan. The driver jumps to next month and clicks day 15 to
-  guarantee this regardless of the current date.
+  returns no plan. The driver picks today + 30 days to guarantee this.
 - **Console errors are expected and benign.** Streamlit's usage-metrics
   fetch fails (`ERR_CERT_AUTHORITY_INVALID` / "Failed to fetch metrics
   config") because outbound telemetry is blocked. This does not affect the
   app — the driver still passes. Don't treat these as failures.
+- **Streamlit's DOM is not stable across versions.** 1.57 rendered the
+  date field as a text input over a calendar popup (`aria-label="Select a
+  date."`, placeholder `YYYY/MM/DD`, day cells were bare `<div>`s clicked
+  by exact text); 1.62 replaced it with a native date input. That's why
+  Setup pins `streamlit==1.62.0`. If you unpin and the driver breaks on
+  the date field, that's the reason.
 
 ## Troubleshooting
 
 - **`Named export 'chromium' not found`** — the global Playwright is
   CommonJS; the driver loads it via `createRequire`, don't `import` it
   directly as ESM.
-- **Driver hangs on `getByText('Sync Plan')`** — the date was left at today
-  (or earlier). Confirm the calendar day click landed on a future date; the
-  `02_filled.png` screenshot shows the chosen `Desired Sync Date`.
+- **Driver hangs on `getByText('Sync Plan')`** — the date is at today or
+  earlier. Confirm `02_filled.png` shows a `Desired Sync Date` in the
+  future; if it shows today, the `input[type="date"]` fill didn't take
+  (usually because you're on an older Streamlit that still uses the popup
+  calendar — pin `streamlit==1.62.0`).
+- **`locator.click: Timeout … waiting for getByPlaceholder('YYYY/MM/DD')`**
+  — Streamlit downgraded/upgraded to a version without that placeholder.
+  Pin to `1.62.0` per Setup.
 - **`EADDRINUSE` / port 8501 busy** — a previous server is still up.
   `kill $(cat /tmp/streamlit.pid)` or `pkill -f 'streamlit run'` first.
